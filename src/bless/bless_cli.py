@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 import textwrap
 from datetime import datetime
+from importlib import resources as importlib_resources
 
 # Python 3.11+ includes tomllib in stdlib
 try:
@@ -18,18 +19,41 @@ except ModuleNotFoundError:
 
 def load_config(config_path: str | None) -> dict:
     """
-    Load the TOML configuration file.
-    If config_path is None, defaults to 'config.toml'
+    Load the TOML configuration file with the following priority:
+
+    1) If --config is provided:
+         use that file (error if it does not exist).
+    2) If no --config is provided:
+         look for a local 'config.toml' in the current working directory.
+    3) If not found:
+         fall back to the default 'config.toml' embedded in the bless package.
+
+    This ensures a user-friendly default behavior while still allowing
+    full configuration override.
     """
-    if config_path is None:
-        config_path = "config.toml"
-    config_file = Path(config_path)
-    if not config_file.is_file():
-        print(f"[ERROR] Config file not found: {config_file}", file = sys.stderr)
+    # Case 1: user explicitly provided --config
+    if config_path is not None:
+        config_file = Path(config_path)
+        if not config_file.is_file():
+            print(f"[ERROR] Config file not found: {config_file}", file=sys.stderr)
+            sys.exit(1)
+        with config_file.open("rb") as f:
+            return tomllib.load(f)
+
+    # Case 2: no --config → check for local config.toml
+    local_file = Path("config.toml")
+    if local_file.is_file():
+        with local_file.open("rb") as f:
+            return tomllib.load(f)
+
+    # Case 3: fallback to packaged config.toml
+    try:
+        pkg_config = importlib_resources.files("bless") / "config.toml"
+        with pkg_config.open("rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        print("[ERROR] No config.toml found locally or in the package.", file=sys.stderr)
         sys.exit(1)
-    with config_file.open("rb") as f:
-        config = tomllib.load(f)
-    return config
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
