@@ -13,7 +13,7 @@ from datetime import datetime
 try:
     import tomllib
 except ModuleNotFoundError:
-    import toml as tomllib
+    import tomli as tomllib
 
 
 def load_config(config_path: str | None) -> dict:
@@ -31,64 +31,66 @@ def load_config(config_path: str | None) -> dict:
         config = tomllib.load(f)
     return config
 
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog = "bless",
-        description = "BLESS pipeline launcher (Step 1: configuration parsing).",
+        prog="bless",
+        description="BLESS pipeline launcher for Slurm HPC.",
     )
     # Required logical arguments
     parser.add_argument(
         "--zips",
-        required = True,
-        help = "Path to the directory containing .zip files.",
+        required=True,
+        help="Path to the directory containing .zip files.",
     )
     parser.add_argument(
         "--mode",
-        required = True,
-        choices = ["synergies", "countpaths", "full"],
-        help = "Pipeline mode: synergies / countpaths / full.",
+        required=True,
+        choices=["synergies", "countpaths", "full"],
+        help="Pipeline mode: synergies / countpaths / full.",
     )
     # Optional pipeline parameters
     parser.add_argument(
         "--sampling",
-        type = int,
-        default = None,
-        help = "Sampling size (0 = no sampling). If omitted, config default is used.",
+        type=int,
+        default=None,
+        help="Sampling size (0 = no sampling). If omitted, config default is used.",
     )
     parser.add_argument(
         "--timeout-sampling",
-        type = int,
-        default = None,
-        help = "Timeout in seconds for sampling. If omitted, config value is used.",
+        type=int,
+        default=None,
+        help="Timeout in seconds for sampling. If omitted, config value is used.",
     )
     parser.add_argument(
         "--timeout-paths",
-        type = int,
-        default = None,
-        help = "Timeout in seconds for path counting. If omitted, config value is used.",
+        type=int,
+        default=None,
+        help="Timeout in seconds for path counting. If omitted, config value is used.",
     )
     parser.add_argument(
         "--skip-initial",
-        action = "store_true",
-        help = "Skip the initial conditions step (MEDIA + iCOND)."
+        action="store_true",
+        help="Skip the initial conditions step (MEDIA + iCOND).",
     )
     # Infrastructure / control
     parser.add_argument(
         "--config",
-        default = None,
-        help = "Path to TOML config file (default: config.toml).",
+        default=None,
+        help="Path to TOML config file (default: config.toml).",
     )
     parser.add_argument(
         "--dry-run",
-        action = "store_true",
-        help = "Do not submit or execute anything (summary only).",
+        action="store_true",
+        help="Do not submit or execute anything (just create sbatch scripts).",
     )
     parser.add_argument(
         "--verbose",
-        action = "store_true",
-        help = "Print additional debug information.",
+        action="store_true",
+        help="Print additional debug information.",
     )
     return parser
+
 
 def build_sbatch_script(slurm_cfg: dict, env_cfg: dict, body: str) -> str:
     """
@@ -101,6 +103,8 @@ def build_sbatch_script(slurm_cfg: dict, env_cfg: dict, body: str) -> str:
         header_lines.append(f"#SBATCH -p {partition}")
     account = slurm_cfg.get("account")
     if account:
+        # Si tu cluster requiere account real, cambia -J por -A:
+        # header_lines.append(f"#SBATCH -A {account}")
         header_lines.append(f"#SBATCH -J {account}")
     time_limit = slurm_cfg.get("time")
     if time_limit:
@@ -117,7 +121,7 @@ def build_sbatch_script(slurm_cfg: dict, env_cfg: dict, body: str) -> str:
     error = slurm_cfg.get("error")
     if error:
         header_lines.append(f"#SBATCH -e {error}")
-    
+
     preamble = env_cfg.get("preamble", "").rstrip("\n")
     script_lines = [
         "#!/bin/bash",
@@ -132,6 +136,7 @@ def build_sbatch_script(slurm_cfg: dict, env_cfg: dict, body: str) -> str:
     ]
     return "\n".join(script_lines)
 
+
 def submit_sbatch(script_path: Path, dependency: str | None = None) -> str | None:
     """
     Submit an sbatch script. If `dependency` is given, it will be used as
@@ -142,10 +147,10 @@ def submit_sbatch(script_path: Path, dependency: str | None = None) -> str | Non
         cmd.extend(["--dependency", f"afterok:{dependency}"])
     cmd.append(str(script_path))
 
-    result = subprocess.run(cmd, capture_output = True, text = True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"[ERROR] sbatch failed for {script_path.name}:", file = sys.stderr)
-        print(result.stderr, file = sys.stderr)
+        print(f"[ERROR] sbatch failed for {script_path.name}:", file=sys.stderr)
+        print(result.stderr, file=sys.stderr)
         return None
     out = result.stdout.strip()
     print(f"[INFO] sbatch output: {out}")
@@ -160,119 +165,57 @@ def submit_sbatch(script_path: Path, dependency: str | None = None) -> str | Non
         print("[WARN] Could not parse job id from sbatch output.")
     return job_id
 
-def run_synergies_pipeline(
-        zips_dir: str,
-        sampling: int,
-        timeout_sampling: int | None,
-        timeout_paths: int | None,
-        media_targets: list[str],
-        skip_initial: bool,
-) -> None:
+
+def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
     """
-    Run the 'synergies' pipeline inside a Slurm/MPI job.
-    Steps:
-        1) Add MEDIA and initial conditions (optional if skip_initial).
-        2) Sampling (optional if sampling == 0).
-        3) Generate perturbed models if needed.
-        4) Count paths with perturbations.
-        5) Compute synergies for each zip
+    Remove previous BLESS result files from each zip in `zips_dir`.
+
+    Currently: drops everything under 'Results/' inside the zip, so that
+    rerunning the pipeline does not accumulate duplicate result entries.
     """
+    zips_path = Path(zips_dir)
+    if not zips_path.is_dir():
+        if verbose:
+            print(f"[WARN] ZIPs directory does not exist or is not a directory: {zips_path}")
+        return
 
-    # Import MPI and BLESS functions
-    from mpi4py import MPI
-    from .BLESS_functions import (
-        AddMedia,
-        InitialConditions,
-        SampleModels,
-        NeedsPerturbation,
-        PertModels_HPC,
-        PathsBless_HPC,
-        PathsBlessFull_HPC,
-        Synergies,
-    )
+    zip_files = sorted(p for p in zips_path.iterdir() if p.suffix == ".zip")
+    if not zip_files and verbose:
+        print(f"[INFO] No .zip files found in {zips_path}")
+        return
 
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    for zip_path in zip_files:
+        if verbose:
+            print(f"[CLEAN] Checking {zip_path.name} for previous results...")
 
-    if rank == 0:
-        print("[PIPELINE] Mode = synergies")
-        print(f"[PIPELINE] Zips directory: {zips_dir}")
-        print(f"[PIPELINE] Sampling size : {sampling}")
-        print(f"[PIPELINE] Skip initial  : {skip_initial}")
-        sys.stdout.flush()
-    # 1) Initial conditions (MEDIA + iCOND)
-    if not skip_initial:
-        if rank == 0:
-            print("[PIPELINE] Step 1: AddMedia + InitialConditions")
-            sys.stdout.flush()
-        AddMedia(zips_dir, media_targets)
-        comm.Barrier()
-        InitialConditions(zips_dir)
-        comm.Barrier()
-    else:
-        if rank == 0:
-            print("[PIPELINE] Skipping initial conditions step")
-            sys.stdout.flush()
-    # 2) Sampling (if sampling > 0)
-    if sampling > 0:
-        if rank == 0:
-            print(f"[PIPELINE] Step 2: Sampling (SampleModels) with size = {sampling}")
-            sys.stdout.flush()
-        # Loop over zip files and call SampleModels on each
-        zfiles = sorted(f for f in os.listdir(zips_dir) if f.endswith(".zip"))
-        for zfile in zfiles:
-            zip_path = os.path.join(zips_dir, zfile)
-            if rank == 0:
-                print(f"[PIPELINE]  Sampling zip: {zfile}")
-                sys.stdout.flush()
-            SampleModels(
-                zip_path,
-                sample_size = sampling,
-                th = timeout_sampling if timeout_sampling is not None else 300,
-            )
-            comm.Barrier()
-    else:
-        if rank == 0:
-            print("[PIPELINE] Sampling disabled")
-            sys.stdout.flush()
-        # 3) Generate perturbed models if needed
-        if rank == 0:
-            print("[PIPELINE] Step 3: Perturbing models")
-            sys.stdout.flush()
-        if NeedsPerturbation(zips_dir):
-            PertModels_HPC(zips_dir)
-        comm.Barrier()
-        # 4) Count paths with perturbations
-        if rank == 0:
-            print("[PIPELINE] Step 4: PathsBless (counting paths)")
-            print(f"[PIPELINE] Timeout for paths = {timeout_paths}")
-            sys.stdout.flush()
-        PathsBless_HPC(zips_dir)
-        comm.Barrier()
-        # 5) Compute synergies per zip
-        if rank == 0:
-            print("[PIPELINE] Step 5: Synergies per zip")
-            sys.stdout.flush()
-        zfiles = sorted(f for f in os.listdir(zips_dir) if f.endswith(".zip"))
-        for i, zfile in enumerate(zfiles):
-            if i % size == rank:
-                zip_path = os.path.join(zips_dir, zfile)
-                groupname = os.path.splitext(zfile)[0]
-                if rank == 0:
-                    print(f"[PIPELINE]  Computing synergies for {zfile}")
-                    sys.stdout.flush()
-                data = Synergies(zip_path)
-                tsv = data.to_csv(sep = "\t", index = True).encode("utf-8")
-                with zipfile.ZipFile(zip_path, "a") as z:
-                    arcname = f"Results/SynergyExcess_{groupname}.tsv"
-                    z.writestr(arcname, tsv)
-                print(f"[PIPELINE]  SynergyExcess writen to {arcname} in {zfile}")
-                sys.stdout.flush()
-        comm.Barrier()
-        if rank == 0:
-            print("[PIPELINE] Synergies pipeline completed.")
-            sys.stdout.flush()
+        with zipfile.ZipFile(zip_path, "r") as zin:
+            entries = zin.infolist()
+            # Keep everything that is NOT under 'Results/'
+            keep_entries = [e for e in entries if not e.filename.startswith("Results/")]
+
+            if len(keep_entries) == len(entries):
+                if verbose:
+                    print(f"[CLEAN]  No Results/ entries found in {zip_path.name}, nothing to remove.")
+                continue
+
+            tmp_path = zip_path.with_suffix(".tmp")
+
+            if verbose:
+                removed = [e.filename for e in entries if e not in keep_entries]
+                print(f"[CLEAN]  Removing {len(removed)} entries from {zip_path.name}:")
+                for name in removed:
+                    print(f"         - {name}")
+
+            with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for e in keep_entries:
+                    data = zin.read(e.filename)
+                    zout.writestr(e, data)
+
+        # Replace original zip with cleaned version
+        tmp_path.replace(zip_path)
+        if verbose:
+            print(f"[CLEAN]  Cleaned zip written back to {zip_path.name}")
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
@@ -353,6 +296,11 @@ def main(argv: list[str] | None = None) -> None:
 
     # 6) From here: we are on the login node and will generate sbatch scripts
 
+    # 6a) Clean previous BLESS results from the zip files
+    print("[INFO] Cleaning previous BLESS results (Results/ folder) in ZIPs...")
+    clean_previous_results(args.zips, verbose=True)
+    print()
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Normalise path for zips (but we keep what the user passed in scripts)
@@ -387,7 +335,7 @@ def main(argv: list[str] | None = None) -> None:
     sampling_script_name: str | None = None
     pipeline_script_name: str | None = None
 
-    # 6a) Initial conditions job (MEDIA + iCOND), unless user skipped it
+    # 6b) Initial conditions job (MEDIA + iCOND), unless user skipped it
     if not args.skip_initial:
         initial_body = textwrap.dedent(
             f"""\
@@ -414,7 +362,7 @@ def main(argv: list[str] | None = None) -> None:
         print("[INFO] Skipping initial conditions step (per --skip-initial).")
         print()
 
-    # 6b) Sampling job, only if sampling > 0
+    # 6c) Sampling job, only if sampling > 0
     if sampling and sampling > 0:
         sampling_body = textwrap.dedent(
             f"""\
@@ -447,7 +395,7 @@ def main(argv: list[str] | None = None) -> None:
         print("[INFO] Sampling disabled (sampling == 0). No sampling job will be created.")
         print()
 
-    # 6c) Pipeline job(s) depending on mode
+    # 6d) Pipeline job(s) depending on mode
     if args.mode == "synergies":
         pipeline_body = textwrap.dedent(
             f"""\
@@ -463,7 +411,7 @@ def main(argv: list[str] | None = None) -> None:
             f"""\
             zip_dir="{zips_dir}"
             echo ">>> [PIPELINE] Starting full path counting (count_allpaths.py) on $zip_dir"
-            mpirun python3 bless.count_allpaths "$zip_dir"
+            mpirun python3 -m bless.count_allpaths "$zip_dir"
             echo ">>> [PIPELINE] Finished full path counting on $zip_dir"
             """
         ).rstrip()
@@ -528,6 +476,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"  sbatch {sbatch_dir / sampling_script_name}")
         dep_hint = "<sampling_job_id>" if (sampling and sampling > 0) else "<initial_job_id>"
         print(f"  sbatch --dependency=afterok:{dep_hint} {sbatch_dir / pipeline_script_name}")
+
 
 if __name__ == "__main__":
     main()
