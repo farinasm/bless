@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-BLESS CLI - Step 1
-Parses arguments and configuration, resolves defaults, and prints a summary.
-No Slurm submission or pipeline execution is performed at this stage.
-"""
 
 import subprocess
 import argparse
@@ -24,36 +19,17 @@ except ModuleNotFoundError:
 def load_config(config_path: str | None) -> dict:
     """
     Load the TOML configuration file.
-
-    Prioridad:
-    1) Si el usuario pasa --config RUTA, usar esa ruta (error si no existe).
-    2) Si no pasa nada, buscar 'config.toml' en el directorio actual.
-    3) Si no existe, usar el 'config.toml' incluido en el paquete bless.
+    If config_path is None, defaults to 'config.toml'
     """
-    # 1) Usuario ha especificado ruta
-    if config_path is not None:
-        config_file = Path(config_path)
-        if not config_file.is_file():
-            print(f"[ERROR] Config file not found: {config_file}", file=sys.stderr)
-            sys.exit(1)
-        with config_file.open("rb") as f:
-            return tomllib.load(f)
-
-    # 2) Buscar config.toml en el directorio actual
-    local_config = Path("config.toml")
-    if local_config.is_file():
-        with local_config.open("rb") as f:
-            return tomllib.load(f)
-
-    # 3) Fallback: usar el config.toml incluido en el paquete
-    try:
-        pkg_config = importlib_resources.files("bless") / "config.toml"
-        with pkg_config.open("rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        print("[ERROR] No config.toml found (neither local nor in package).", file=sys.stderr)
+    if config_path is None:
+        config_path = "config.toml"
+    config_file = Path(config_path)
+    if not config_file.is_file():
+        print(f"[ERROR] Config file not found: {config_file}", file = sys.stderr)
         sys.exit(1)
-
+    with config_file.open("rb") as f:
+        config = tomllib.load(f)
+    return config
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -417,7 +393,7 @@ def main(argv: list[str] | None = None) -> None:
             f"""\
             zip_dir="{zips_dir}"
             echo ">>> [INITIAL] Starting AddMedia + InitialConditions on $zip_dir"
-            mpirun python3 -m initial_conditions.py "$zip_dir"
+            mpirun python3 -m bless.initial_conditions "$zip_dir"
             echo ">>> [INITIAL] Finished AddMedia + InitialConditions on $zip_dir"
             """
         ).rstrip()
@@ -445,7 +421,7 @@ def main(argv: list[str] | None = None) -> None:
             zip_dir="{zips_dir}"
             for z in "$zip_dir"/*.zip; do
                 echo ">>> [SAMPLING] Starting radical sampling for: $z"
-                mpirun python3 -m do_sampling.py "$z"
+                mpirun python3 -m bless.do_sampling "$z"
                 echo ">>> [SAMPLING] Finished radical sampling for: $z"
             done
             """
@@ -477,7 +453,7 @@ def main(argv: list[str] | None = None) -> None:
             f"""\
             zip_dir="{zips_dir}"
             echo ">>> [PIPELINE] Starting synergies pipeline (compute_synergies.py) on $zip_dir"
-            mpirun python3 -m compute_synergies.py "$zip_dir"
+            mpirun python3 -m bless.compute_synergies "$zip_dir"
             echo ">>> [PIPELINE] Finished synergies pipeline on $zip_dir"
             """
         ).rstrip()
@@ -487,7 +463,7 @@ def main(argv: list[str] | None = None) -> None:
             f"""\
             zip_dir="{zips_dir}"
             echo ">>> [PIPELINE] Starting full path counting (count_allpaths.py) on $zip_dir"
-            mpirun python3 -m count_allpaths.py "$zip_dir"
+            mpirun python3 bless.count_allpaths "$zip_dir"
             echo ">>> [PIPELINE] Finished full path counting on $zip_dir"
             """
         ).rstrip()
@@ -497,9 +473,9 @@ def main(argv: list[str] | None = None) -> None:
             f"""\
             zip_dir="{zips_dir}"
             echo ">>> [PIPELINE] Starting synergies (compute_synergies.py) on $zip_dir"
-            mpirun python3 -m compute_synergies.py "$zip_dir"
+            mpirun python3 -m bless.compute_synergies "$zip_dir"
             echo ">>> [PIPELINE] Synergies finished, starting full path counting (count_allpaths.py)"
-            mpirun python3 -m count_allpaths.py "$zip_dir"
+            mpirun python3 -m bless.count_allpaths "$zip_dir"
             echo ">>> [PIPELINE] Finished full mode (synergies + countpaths) on $zip_dir"
             """
         ).rstrip()
