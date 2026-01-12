@@ -193,8 +193,12 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
     """
     Remove previous BLESS result files from each zip in `zips_dir`.
 
-    Currently: drops everything under 'Results/' inside the zip, so that
-    rerunning the pipeline does not accumulate duplicate result entries.
+    Currently:
+      - Drops everything under 'Results/' inside the zip
+      - Drops any file named 'SampledModels_*.txt' anywhere in the zip
+
+    This prevents duplicated results and sampled-models warnings when
+    re-running the pipeline on the same ZIPs.
     """
     zips_path = Path(zips_dir)
     if not zips_path.is_dir():
@@ -213,18 +217,26 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
 
         with zipfile.ZipFile(zip_path, "r") as zin:
             entries = zin.infolist()
-            # Keep everything that is NOT under 'Results/'
-            keep_entries = [e for e in entries if not e.filename.startswith("Results/")]
+
+            def is_result_entry(e: zipfile.ZipInfo) -> bool:
+                # Anything under Results/
+                if e.filename.startswith("Results/"):
+                    return True
+                # Any file named SampledModels_*.txt anywhere in the zip
+                name = Path(e.filename).name
+                return name.startswith("SampledModels_") and name.endswith(".txt")
+
+            keep_entries = [e for e in entries if not is_result_entry(e)]
 
             if len(keep_entries) == len(entries):
                 if verbose:
-                    print(f"[CLEAN]  No Results/ entries found in {zip_path.name}, nothing to remove.")
+                    print(f"[CLEAN]  No Results/ or SampledModels_ entries found in {zip_path.name}, nothing to remove.")
                 continue
 
             tmp_path = zip_path.with_suffix(".tmp")
 
             if verbose:
-                removed = [e.filename for e in entries if e not in keep_entries]
+                removed = [e.filename for e in entries if is_result_entry(e)]
                 print(f"[CLEAN]  Removing {len(removed)} entries from {zip_path.name}:")
                 for name in removed:
                     print(f"         - {name}")
@@ -240,13 +252,14 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
             print(f"[CLEAN]  Cleaned zip written back to {zip_path.name}")
 
 
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
     # 1) Decide which config path is actually used
     config = load_config(args.config)
-    
+
     slurm_cfg = config.get("slurm", {})
     env_cfg = config.get("env", {})
     bless_cfg = config.get("bless", {})
