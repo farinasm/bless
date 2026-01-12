@@ -245,9 +245,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     # 1) Decide which config path is actually used
-    config_path_used = args.config or "config.toml"
-    config = load_config(config_path_used)
-
+    config = load_config(args.config)
+    
     slurm_cfg = config.get("slurm", {})
     env_cfg = config.get("env", {})
     bless_cfg = config.get("bless", {})
