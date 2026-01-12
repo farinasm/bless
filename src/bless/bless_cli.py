@@ -16,7 +16,6 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-
 def load_config(config_path: str | None) -> dict:
     """
     Load the TOML configuration file with the following priority:
