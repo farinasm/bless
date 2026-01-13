@@ -193,12 +193,13 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
     """
     Remove previous BLESS result files from each zip in `zips_dir`.
 
-    Currently:
-      - Drops everything under 'Results/' inside the zip
-      - Drops any file named 'SampledModels_*.txt' anywhere in the zip
+    This currently removes:
+      - Anything under 'Results/' (full folder)
+      - Anything under 'SampledModels/' (full folder)
+      - Any file named 'SampledModels_*.txt' anywhere in the zip
 
-    This prevents duplicated results and sampled-models warnings when
-    re-running the pipeline on the same ZIPs.
+    This prevents duplicated sample-model files and warnings like
+    'Duplicate name: SampledModels_*.txt' when re-running the pipeline.
     """
     zips_path = Path(zips_dir)
     if not zips_path.is_dir():
@@ -219,10 +220,13 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
             entries = zin.infolist()
 
             def is_result_entry(e: zipfile.ZipInfo) -> bool:
-                # Anything under Results/
+                # Entire Results/ folder
                 if e.filename.startswith("Results/"):
                     return True
-                # Any file named SampledModels_*.txt anywhere in the zip
+                # Entire SampledModels/ folder
+                if e.filename.startswith("SampledModels/"):
+                    return True
+                # Individual SampledModels_*.txt files anywhere
                 name = Path(e.filename).name
                 return name.startswith("SampledModels_") and name.endswith(".txt")
 
@@ -230,7 +234,7 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
 
             if len(keep_entries) == len(entries):
                 if verbose:
-                    print(f"[CLEAN]  No Results/ or SampledModels_ entries found in {zip_path.name}, nothing to remove.")
+                    print(f"[CLEAN]  Nothing to remove in {zip_path.name}")
                 continue
 
             tmp_path = zip_path.with_suffix(".tmp")
@@ -246,11 +250,9 @@ def clean_previous_results(zips_dir: str, verbose: bool = True) -> None:
                     data = zin.read(e.filename)
                     zout.writestr(e, data)
 
-        # Replace original zip with cleaned version
         tmp_path.replace(zip_path)
         if verbose:
             print(f"[CLEAN]  Cleaned zip written back to {zip_path.name}")
-
 
 
 def main(argv: list[str] | None = None) -> None:
